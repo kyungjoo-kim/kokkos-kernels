@@ -87,7 +87,7 @@ namespace KokkosBatched {
           const auto matrix_layout = ( as1 == 1 ? LAPACK_ROW_MAJOR : LAPACK_COL_MAJOR );            
           LAPACKE_dgehrd(matrix_layout, m, 1, m, A, m, t);
             
-          SerialCopyInternal::invoke(m, m, QZ, qzs0, qzs1);          
+          SerialCopyInternal::invoke(m, m, A, as0, as1, QZ, qzs0, qzs1);          
           LAPACKE_dorghr(matrix_layout, m, 1, m, QZ, m, t);
         } else { /// for arbitrary strides, there is no choice to use tpls
           real_type *ww = w_now; w_now += m; wlen_now -= m;
