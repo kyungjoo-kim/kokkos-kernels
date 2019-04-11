@@ -5,6 +5,7 @@
 /// \author Kyungjoo Kim (kyukim@sandia.gov)
 
 #include "KokkosBatched_Util.hpp"
+#include "KokkosBatched_Copy_Internal.hpp"
 #include "KokkosBatched_SetIdentity_Internal.hpp"
 #include "KokkosBatched_SetTriangular_Internal.hpp"
 #include "KokkosBatched_Normalize_Internal.hpp"
