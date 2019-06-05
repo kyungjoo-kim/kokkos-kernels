@@ -22,6 +22,8 @@ namespace KokkosBatched {
     static int
     invoke(const int m, // m = NumRows(A)
            const int n, // n = NumCols(A)
+           const int ilo, // 
+           const int ihi, // 
            /* */ ValueType * A, const int as0, const int as1,
            /* */ ValueType * t, const int ts,
            /* */ ValueType * w) {
@@ -44,10 +46,10 @@ namespace KokkosBatched {
       Partition1x2<value_type> A2_part1x2 (as1);
 
       // initial partition of A where ATL has a zero dimension
-      A_part2x2.partWithATL(A, m, n, 0, 0);
-      t_part2x1.partWithAT (t, m,    0   );
+      A_part2x2.partWithATL(A, m, n, ilo, ilo);
+      t_part2x1.partWithAT (t, m,    ilo     );
 
-      for (int m_atl=0;m_atl<m;++m_atl) {
+      for (int m_atl=ilo;m_atl<ihi;++m_atl) {
         // part 2x2 into 3x3
         A_part3x3.partWithABR(A_part2x2, 1, 1);
         const int m_A22 = m - m_atl - 1;

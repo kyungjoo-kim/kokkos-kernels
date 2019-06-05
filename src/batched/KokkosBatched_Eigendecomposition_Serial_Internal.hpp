@@ -9,6 +9,7 @@
 #include "KokkosBatched_SetIdentity_Internal.hpp"
 #include "KokkosBatched_SetTriangular_Internal.hpp"
 #include "KokkosBatched_Normalize_Internal.hpp"
+#include "KokkosBatched_BalanceMatrix_Serial_Internal.hpp"
 #include "KokkosBatched_Hessenberg_Serial_Internal.hpp"
 #include "KokkosBatched_ApplyQ_Serial_Internal.hpp"
 #include "KokkosBatched_Schur_Serial_Internal.hpp"
@@ -67,6 +68,11 @@ namespace KokkosBatched {
       int wlen_now = wlen;
       assert( (wlen_now >= 0) && "Eigendecomposition: workspace size is negative");
 
+#if defined(KOKKOSKERNELS_ENABLE_TPL_MKL) && defined(KOKKOS_ACTIVE_EXECUTION_MEMORY_SPACE_HOST)
+      int abeg = 0, aend = m;
+      real_type *scale = w_now; w_now += m; wlen_now -= m;
+#endif
+
       const bool is_UL = UL != NULL, is_UR = UR != NULL;
       const bool is_U  = is_UL || is_UR;
       assert( is_U && "Eigendecomposition: eigenvectors are not requested; consider to use SerialEigenvalueInternal");
@@ -84,38 +90,71 @@ namespace KokkosBatched {
         real_type *t  = w_now; w_now += m; wlen_now -= m;
         assert( (wlen_now >= 0) && "Eigendecomposition: Hessenberg reduction workspace t allocation fail");
           
-        if (as0 == 1 || as1 == 1) { /// if mkl can be interfaced, use it 
+        if (false && 
+            std::is_same<real_type,double>::value && (as0 == 1 || as1 == 1)) { /// if mkl can be interfaced, use it 
           const auto matrix_layout = ( as1 == 1 ? LAPACK_ROW_MAJOR : LAPACK_COL_MAJOR );            
-          LAPACKE_dgehrd(matrix_layout, m, 1, m, A, m, t);
+          int ilo = 0, ihi = 0;
+          LAPACKE_dgebal(matrix_layout, 'B', m, A, m, &ilo, &ihi, scale);
+          LAPACKE_dgehrd(matrix_layout, m, ilo, ihi, A, m, t);
             
           SerialCopyInternal::invoke(m, m, A, as0, as1, QZ, qzs0, qzs1);          
-          LAPACKE_dorghr(matrix_layout, m, 1, m, QZ, m, t);
+          LAPACKE_dorghr(matrix_layout, m, ilo, ihi, QZ, m, t);
+
+          /// mkl uses 1-base index
+          abeg = ilo - 1;
+          aend = ihi;
+
+          printf("arange %d %d\n", abeg, aend);
+          for (int i=abeg;i<aend;++i) {
+            printf("%e\n", scale[i]);
+          }
+
         } else { /// for arbitrary strides, there is no choice to use tpls
           real_type *ww = w_now; w_now += m; wlen_now -= m;
           assert( (wlen_now >= 0) && "Eigendecomposition: Hessenberg reduction workspace ww allocation fail");
-
-          SerialHessenbergInternal::invoke(m, m,
+          SerialBalanceMatrixInternal::invoke(m, 
+                                              A, as0, as1, 
+                                              abeg, aend,
+                                              scale, 1);
+          SerialHessenbergInternal::invoke(m, m,  
+                                           abeg, aend,
                                            A, as0, as1,
                                            t, 1,
                                            ww);
             
-          SerialSetIdentityInternal::invoke(m, QZ, qzs0, qzs1);          
-          SerialApplyQ_LeftNoTransForwardInternal::invoke(m-1, m-1, m-1,
-                                                          A+as0, as0, as1,
-                                                          t, 1,
-                                                          QZ+qzs, qzs0, qzs1,
+          SerialSetIdentityInternal::invoke(m, QZ, qzs0, qzs1);
+
+          const int mm = aend-abeg-1;
+          SerialApplyQ_LeftNoTransForwardInternal::invoke(mm, mm, mm,
+                                                          A+abeg*as+as0, as0, as1,
+                                                          t+abeg, 1,
+                                                          QZ+abeg*qzs+qzs, qzs0, qzs1,
                                                           ww);
           /// recovery of workspace for ww
           w_now -= m; wlen_now += m;
+
+          printf("- arange %d %d\n", abeg, aend);
+          for (int i=abeg;i<aend;++i) {
+            printf("%e\n", scale[i]);
+          }
+
         }
         /// recovery of workspace for t
         w_now -= m; wlen_now += m;
 
         /// clean up H
-        SerialSetLowerTriangularInternal::invoke(m, m,
-                                                 2,
+        SerialSetLowerTriangularInternal::invoke(m, abeg,
+                                                 1,
                                                  zero,
                                                  A, as0, as1);
+        SerialSetLowerTriangularInternal::invoke(m-abeg, aend-abeg,
+                                                 2,
+                                                 zero,
+                                                 A+abeg*as, as0, as1);
+        SerialSetLowerTriangularInternal::invoke(m-aend, m-aend,
+                                                 1,
+                                                 zero,
+                                                 A+aend*as, as0, as1);
       }
 #else
       {
@@ -163,7 +202,7 @@ namespace KokkosBatched {
         w_now -= (5*m); wlen_now += (5*m);          
       }
         
-      /// Step 3: Extract iigenvalues and eigenvectors from T = V S V^-1
+      /// Step 3: Extract eiigenvalues and eigenvectors from T = V S V^-1
       /// 
       {
         /// extract eigenvalues 
@@ -225,6 +264,12 @@ namespace KokkosBatched {
                      V, vs0, vs1,
                      zero,
                      UR, urs0, urs1);
+
+            /// backward transformation 
+            // SerialBalanceMatrixBackwardRightInternal::invoke(m, m, 
+            //                                                  abeg, aend, scale, 
+            //                                                  UR, urs0, urs1);
+            
             int j=0;
             for (;j<m;) {
               if (ats::abs(ei[j*eis]) < tol) {
@@ -259,7 +304,11 @@ namespace KokkosBatched {
                      QZ, qzs1, qzs0,
                      zero,
                      UL, uls0, uls1);            
-              
+            LAPACKE_dgebak( int matrix_layout, char job, char side, lapack_int n, lapack_int ilo, lapack_int ihi, const double* scale, lapack_int m, double* v, lapack_int ldv );
+            // SerialBalanceMatrixBackwardLeftInternal::invoke(m, m, 
+            //                                                 abeg, aend, scale, 
+            //                                                 UL, uls0, uls1);
+            
             int i=0;
             for (;i<m;) {
               /// normalize row vectors
@@ -284,6 +333,11 @@ namespace KokkosBatched {
       }
       /// deallocate QZ
       w_now -= (m*m); wlen_now += (m*m);
+
+      /// deallocate scale
+#if defined(KOKKOSKERNELS_ENABLE_TPL_MKL) && defined(KOKKOS_ACTIVE_EXECUTION_MEMORY_SPACE_HOST)
+      w_now -= m; wlen_now += m;
+#endif
 
       assert( (w == w_now) && "Eigendecomposition: workspace tracking fails");
       assert( (wlen == wlen_now) && "Eigendecomposition: workspace counting fails");
